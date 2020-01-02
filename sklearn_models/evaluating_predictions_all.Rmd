@@ -1,0 +1,361 @@
+---
+title: "evaluating_predictions_all"
+author: "Ludvig Olsen"
+date: "12/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(cvms)
+library(doParallel)
+library(caret)
+library(ggplot2)
+
+registerDoParallel(4)
+set.seed(1)
+
+# install.packages("viridis")  # Install
+library("viridis")           # Load
+
+```
+
+
+```{r}
+project_path <- "/"
+# prefixes <- c("downsampled", "upsampled", "iscontrol_downsampled")
+# ngrams <- c("1","2","3")
+# paths <- paste(project_path, prefixes,"_ngrams_", ngrams, "_NB_predictions.csv")
+paths <- list.files(paste0(project_path, "predictions/"))
+
+prediction_data <- plyr::ldply(paths, function(p){
+  read.csv(
+    paste0(project_path, "predictions/", p), stringsAsFactors = FALSE) %>% 
+    dplyr::mutate(file_path = p,
+                  prefix = dplyr::case_when(
+                    stringr::str_detect(file_path,"iscontrol_downsampled") ~ "IsControlDownsampled",
+                    stringr::str_detect(file_path,"downsampled") ~ "Downsampled",
+                    stringr::str_detect(file_path,"upsampled") ~ "Upsampled",
+                    stringr::str_detect(file_path,"imbalanced") ~ "Imbalanced",
+                    TRUE ~ ""
+                  ),
+                  ngrams = factor(dplyr::case_when(
+                    stringr::str_detect(file_path,"ngrams_1") ~ 1,
+                    stringr::str_detect(file_path,"ngrams_2") ~ 2,
+                    stringr::str_detect(file_path,"ngrams_3") ~ 3,
+                    TRUE ~ 0
+                  )),
+                  subwords = factor(dplyr::case_when(
+                    stringr::str_detect(file_path,"subwords") ~ 1,
+                    TRUE ~ 0
+                  )),
+                  Classifier = ifelse(Classifier == "RandomForestClassifier", "RandomForest", Classifier))
+}) %>% dplyr::as_tibble() %>% 
+  dplyr::mutate(DiagnosisPrediction = factor(DiagnosisPrediction))
+
+dumm <- caret::dummyVars(~DiagnosisPrediction, prediction_data)
+one_hot <- predict(dumm, newdata=prediction_data)
+colnames(one_hot) <- substring(colnames(one_hot), nchar("DiagnosisPrediction.."))
+one_hot <- dplyr::as_tibble(one_hot)
+
+prediction_data <- prediction_data %>% 
+  dplyr::bind_cols(one_hot)
+
+```
+
+## Baselines
+
+```{r }
+
+if (FALSE){
+  
+  # Perform the two types of baseline evaluations (multiclass and control/not control)
+  # for each dataset (prefix)
+  baseline_evaluations <- plyr::llply(unique(prediction_data$prefix), .parallel = TRUE, function(pref){
+    
+    test_set <- prediction_data %>% 
+      dplyr::filter(prefix == pref,
+                    Classifier == "ComplementNB",
+                    ngrams == "1")
+    
+    multiclass_baseline <- test_set %>% 
+      cvms::baseline(
+        dependent_col = "Target",
+        n = 100,
+        # metrics = list("Accuracy" = TRUE),
+        family = "multinomial",
+        parallel = FALSE
+      )
+    
+    iscontrol_baseline <- test_set %>% 
+      cvms::baseline(
+        dependent_col = "isControl",
+        n = 100,
+        #metrics = list("Accuracy" = TRUE),
+        family = "binomial",
+        parallel = FALSE
+      )
+    
+    list("prefix" = pref, "baselines" = list(
+      "multiclass" = multiclass_baseline,
+      "iscontrol" = iscontrol_baseline
+    ))
+    
+  })
+  
+  save(baseline_evaluations, file=paste0(project_path, "baseline_evaluations.rda"))
+    
+} else {
+  
+  load(paste0(project_path, "baseline_evaluations.rda"))
+  
+}
+
+
+downsampled_baseline_multiclass <- baseline_evaluations[[1]]$baselines$multiclass
+downsampled_baseline_iscontrol <- baseline_evaluations[[1]]$baselines$iscontrol
+
+imbalanced_baseline_multiclass <- baseline_evaluations[[2]]$baselines$multiclass
+imbalanced_baseline_iscontrol <- baseline_evaluations[[2]]$baselines$iscontrol
+
+IsControlDownsampled_baseline_multiclass <- baseline_evaluations[[3]]$baselines$multiclass
+IsControlDownsampled_baseline_iscontrol <- baseline_evaluations[[3]]$baselines$iscontrol
+
+upsampled_baseline_multiclass <- baseline_evaluations[[4]]$baselines$multiclass
+upsampled_baseline_iscontrol <- baseline_evaluations[[4]]$baselines$iscontrol
+
+get_relevant_summaries <- function(bsl_eval){
+  summarized <- bsl_eval$summarized_metrics
+  summarized[summarized[["Measure"]] %in% c("Mean", "SD", "Max"), c(1:4,7,5)]
+}
+
+get_relevant_summaries(imbalanced_baseline_multiclass)
+
+get_metric <- function(summarized_metrics, metric, dataset){
+  m <- summarized_metrics[
+    summarized_metrics[["Measure"]] %in% c("Mean", "SD","All_Control","All_Depression","All_Schizophrenia"),
+    c("Measure", metric)
+    ]
+  m[["dataset"]] <- dataset
+  m
+}
+
+# Multiclass
+balanced_accuracy_baselines <- dplyr::bind_rows(
+  get_metric(downsampled_baseline_multiclass$summarized_metrics, "Balanced Accuracy", "Downsampled"),
+  get_metric(imbalanced_baseline_multiclass$summarized_metrics, "Balanced Accuracy", "Imbalanced"),
+  get_metric(IsControlDownsampled_baseline_multiclass$summarized_metrics, "Balanced Accuracy", "IsControlDownsampled"),
+  get_metric(upsampled_baseline_multiclass$summarized_metrics, "Balanced Accuracy", "Upsampled"))
+balanced_accuracy_baselines <- tidyr::spread(balanced_accuracy_baselines, key=1, value=2) %>% 
+  dplyr::rename(prefix=dataset)
+
+overall_accuracy_baselines <- dplyr::bind_rows(
+  get_metric(downsampled_baseline_multiclass$summarized_metrics, "Overall Accuracy", "Downsampled"),
+  get_metric(imbalanced_baseline_multiclass$summarized_metrics, "Overall Accuracy", "Imbalanced"),
+  get_metric(IsControlDownsampled_baseline_multiclass$summarized_metrics, "Overall Accuracy", "IsControlDownsampled"),
+  get_metric(upsampled_baseline_multiclass$summarized_metrics, "Overall Accuracy", "Upsampled"))
+overall_accuracy_baselines <- tidyr::spread(overall_accuracy_baselines, key=1, value=2) %>% 
+  dplyr::rename(prefix=dataset)
+
+iscontrol_get_metric <- function(summarized_metrics, metric, dataset){
+  m <- summarized_metrics[
+    summarized_metrics[["Measure"]] %in% c("Mean", "SD","All_0","All_1"),
+    c("Measure", metric)
+    ]
+  m[["dataset"]] <- dataset
+  m
+}
+
+# iscontrol
+iscontrol_balanced_accuracy_baselines <- dplyr::bind_rows(
+  iscontrol_get_metric(downsampled_baseline_iscontrol$summarized_metrics, "Balanced Accuracy", "Downsampled"),
+  iscontrol_get_metric(imbalanced_baseline_iscontrol$summarized_metrics, "Balanced Accuracy", "Imbalanced"),
+  iscontrol_get_metric(IsControlDownsampled_baseline_iscontrol$summarized_metrics, "Balanced Accuracy", "IsControlDownsampled"),
+  iscontrol_get_metric(upsampled_baseline_iscontrol$summarized_metrics, "Balanced Accuracy", "Upsampled"))
+iscontrol_balanced_accuracy_baselines <- tidyr::spread(iscontrol_balanced_accuracy_baselines, key=1, value=2) %>% 
+  dplyr::rename(prefix=dataset)
+
+iscontrol_F1_baselines <- dplyr::bind_rows(
+  iscontrol_get_metric(downsampled_baseline_iscontrol$summarized_metrics, "F1", "Downsampled"),
+  iscontrol_get_metric(imbalanced_baseline_iscontrol$summarized_metrics, "F1", "Imbalanced"),
+  iscontrol_get_metric(IsControlDownsampled_baseline_iscontrol$summarized_metrics, "F1", "IsControlDownsampled"),
+  iscontrol_get_metric(upsampled_baseline_iscontrol$summarized_metrics, "F1", "Upsampled"))
+iscontrol_F1_baselines <- tidyr::spread(iscontrol_F1_baselines, key=1, value=2) %>% 
+  dplyr::rename(prefix=dataset)
+
+```
+
+## Control vs Schizophrenic vs Depressed
+
+```{r}
+
+evaluations <- prediction_data %>% 
+  dplyr::filter(prefix != "IsControlDownsampled") %>% 
+  dplyr::group_by(prefix, Classifier, subwords, ngrams) %>% 
+  cvms::evaluate(target_col = "Target", prediction_cols = colnames(one_hot),
+                 metrics=list("Accuracy"=TRUE),
+                 type="multinomial",
+                 parallel=TRUE)
+
+# TODO: Don't clump with and without subwords together here!
+plot_evaluations <- function(evals, metric, y_baseline, y_all_baselines=NULL){
+  
+  pl <- evals %>% 
+    dplyr::mutate(ngrams_subword = paste0(ngrams,"_",subwords)) %>% 
+    dplyr::filter(Classifier != "RandomForest") %>% 
+    ggplot(aes_string(x="Classifier", y=metric, color="ngrams_subword")) +
+    geom_boxplot() + #geom_point() +
+    geom_hline(yintercept=y_baseline, color="grey")+
+    facet_wrap(prefix~.) + 
+    theme_light() +
+    coord_cartesian(ylim=c(0.10,0.9)) + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    scale_y_continuous(breaks = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)) +
+    scale_color_viridis(discrete = TRUE, option = "D")+
+    scale_fill_viridis(discrete = TRUE) +
+    labs(title = "Control / Depressed / Schizophrenic")
+  
+  if (!is.null(y_all_baselines)){
+    line_colors <- viridis(10)[c(4,7,9)]
+    pl <- pl + 
+      geom_hline(data=y_all_baselines, aes(yintercept=All_Control), color=line_colors[[1]], alpha=1) +
+      geom_hline(data=y_all_baselines, aes(yintercept=All_Depression), color=line_colors[[2]], alpha=1) +
+      geom_hline(data=y_all_baselines, aes(yintercept=All_Schizophrenia), color=line_colors[[3]], alpha=1)
+  }
+  
+  pl
+  
+}
+
+
+tiff(paste0(project_path, "plots/", "balanced_accuracy_by_prefix.tiff"), 
+     units="in", width=8, height=6, res=300)
+plot_evaluations(evaluations, "`Balanced Accuracy`", 0.5)
+dev.off()
+
+
+tiff(paste0(project_path, "plots/", "overall_accuracy_by_prefix.tiff"), 
+     units="in", width=8, height=6, res=300)
+plot_evaluations(evaluations, "`Overall Accuracy`", 0.33, 
+                 overall_accuracy_baselines %>% dplyr::filter(prefix != "IsControlDownsampled"))
+dev.off()
+
+# grey line is chance level
+# pink line is all_schizophrenia baseline
+# lightblue line is all_control baseline
+# lightgreen line is all_depression baseline
+
+
+best_evals <- evaluations %>% 
+  dplyr::group_by(prefix, Classifier, subwords) %>% 
+  dplyr::arrange(prefix,
+                 dplyr::desc(`Balanced Accuracy`), 
+                 dplyr::desc(F1), 
+                 dplyr::desc(`Overall Accuracy`)) %>% 
+  dplyr::filter(dplyr::row_number() == 1)
+  
+get_relevant_metrics <- function(evals, prefix){
+  evals[evals[["prefix"]] == prefix,c(1:6,8,11,9)]  
+}
+
+get_relevant_metrics(best_evals, "Imbalanced")
+get_relevant_metrics(best_evals, "Downsampled")
+get_relevant_metrics(best_evals, "Upsampled")
+
+```
+
+```{r}
+# Confusion matrices for best models
+
+best_models <- best_evals %>% dplyr::group_by(prefix) %>% dplyr::filter(dplyr::row_number() == 1)
+  
+conf_to_table <- function(conf_mat){
+  dims <- sqrt(nrow(conf_mat))
+  prep_table <- table(conf_mat$Prediction,  conf_mat$Target, dnn = c("Prediction", "Target")) 
+  counts <- matrix(conf_mat$N, dims, dims)
+  prep_table * counts
+}
+conf_to_table(best_models$`Confusion Matrix`[[1]])
+
+```
+
+```{r}
+# downsampled
+tiff(paste0(project_path, "plots/", "confusion_matrix_downsampled.tiff"), 
+     units="in", width=4, height=4, res=300)
+cvms::plot_confusion_matrix(best_models$`Confusion Matrix`[[1]])
+dev.off()
+
+# imbalanced
+tiff(paste0(project_path, "plots/", "confusion_matrix_imbalanced.tiff"), 
+     units="in", width=4, height=4, res=300)
+plot_confusion_matrix(best_models$`Confusion Matrix`[[2]])
+dev.off()
+
+# upsampled
+tiff(paste0(project_path, "plots/", "confusion_matrix_upsampled.tiff"), 
+     units="in", width=4, height=4, res=300)
+plot_confusion_matrix(best_models$`Confusion Matrix`[[3]])
+dev.off()
+```
+
+
+## Is Control
+
+```{r}
+iscontrol_evaluations <- prediction_data %>% 
+  # dplyr::filter(prefix == "IsControlDownsampled") %>% 
+  dplyr::group_by(prefix, Classifier, subwords, ngrams) %>% 
+  cvms::evaluate(target_col = "isControl", prediction_cols = "IsControlPrediction",
+                 metrics=list("Accuracy"=TRUE),
+                 type="binomial",
+                 parallel=TRUE)
+
+iscontrol_plot_evaluations <- function(evals, metric, y_baseline, y_all_baselines=NULL){
+  
+  pl <- evals %>% 
+    ggplot(aes_string(x="Classifier", y=metric, color="ngrams")) +
+    facet_wrap(prefix~.) + 
+    theme_light() +
+    coord_cartesian(ylim=c(0.10,0.9)) + 
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    scale_y_continuous(breaks = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9)) +
+    labs(title = "Control / Not Control")
+  
+  if (is.vector(y_baseline) && is.numeric(y_baseline)){
+    pl <- pl +
+      geom_hline(yintercept=y_baseline, color="grey")
+  } else if (is.data.frame(y_baseline)){
+    pl <- pl + 
+      geom_hline(data=y_baseline, aes(yintercept=Mean), color="grey", alpha=1)
+  }
+  
+  if (!is.null(y_all_baselines)){
+    pl <- pl + 
+      geom_hline(data=y_all_baselines, aes(yintercept=All_1), color="lightblue", alpha=1) +
+      geom_hline(data=y_all_baselines, aes(yintercept=All_0), color="lightgreen", alpha=1) # +
+      # geom_hline(data=y_all_baselines, aes(yintercept=All_Schizophrenia), color="pink", alpha=1)
+  }
+  
+  pl + geom_boxplot() # + #geom_point() +
+  
+}
+
+iscontrol_plot_evaluations(iscontrol_evaluations, "`Balanced Accuracy`", y_baseline = 0.5)
+iscontrol_plot_evaluations(iscontrol_evaluations, "F1", y_baseline = iscontrol_F1_baselines, 
+                           iscontrol_F1_baselines)
+
+
+
+iscontrol_evaluations %>% 
+  dplyr::group_by(prefix) %>% 
+  dplyr::arrange(dplyr::desc(`Balanced Accuracy`), 
+                 dplyr::desc(F1)) %>% 
+  dplyr::filter(dplyr::row_number() == 1)
+
+```
+

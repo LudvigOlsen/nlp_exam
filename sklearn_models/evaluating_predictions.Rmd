@@ -1,0 +1,253 @@
+---
+title: "Evaluating Predictions SINGLE"
+author: "Ludvig Olsen"
+date: "12/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(cvms)
+library(doParallel)
+```
+
+```{r}
+# Evaluate sklearn predictions
+
+prefix <- "downsampled_" # "upsampled_" ""
+ngrams <- "ngrams_2"
+
+predictions_path <- paste0("")
+predictions <- read.csv(predictions_path, stringsAsFactors = FALSE)
+
+CNB <- predictions %>% 
+  dplyr::filter(Classifier == "ComplementNB")
+
+MNB <- predictions %>% 
+  dplyr::filter(Classifier == "MultinomialNB")
+
+BNB <- predictions %>% 
+  dplyr::filter(Classifier == "BernoulliNB")
+
+RFST <- predictions %>% 
+  dplyr::filter(Classifier == "RandomForestClassifier")
+
+SVM <- predictions %>% 
+  dplyr::filter(Classifier == "LinearSVC")
+```
+
+## Classifying diagnosis
+
+### Baseline
+
+```{r}
+registerDoParallel(5)
+baseline_eval_diagnosis <- cvms::baseline(
+  test_data = CNB,
+  dependent_col = "Target",
+  n = 20,
+  family = "multinomial",
+  metrics = list("Accuracy" = TRUE),
+  parallel = TRUE
+)
+
+summarized_metrics <- baseline_eval_diagnosis$summarized_metrics
+summarized_metrics %>% .[1:7] %>% knitr::kable()
+summarized_metrics %>% .[c(1, 8:11)] %>% knitr::kable()
+
+summarized_class_level_results <- tidyr::unnest(
+  baseline_eval_diagnosis$summarized_class_level_results, cols="Results")
+
+summarized_class_level_results %>% dplyr::filter(Class == "Control") %>% .[1:7] %>% knitr::kable()
+summarized_class_level_results %>% dplyr::filter(Class == "Control") %>% .[c(1:2, 8:11)] %>% knitr::kable()
+
+summarized_class_level_results %>% dplyr::filter(Class == "Depression") %>% .[1:7] %>% knitr::kable()
+summarized_class_level_results %>% dplyr::filter(Class == "Depression") %>% .[c(1:2, 8:11)] %>% knitr::kable()
+
+summarized_class_level_results %>% dplyr::filter(Class == "Schizophrenia") %>% .[1:7] %>% knitr::kable()
+summarized_class_level_results %>% dplyr::filter(Class == "Schizophrenia") %>% .[c(1:2, 8:11)] %>% knitr::kable()
+
+summarized_class_level_results %>% dplyr::filter(Measure %in% c("All_1", "All_0")) %>% .[1:7] %>% knitr::kable()
+summarized_class_level_results %>% dplyr::filter(Measure %in% c("All_1", "All_0")) %>% .[c(1:2, 8:11)] %>% knitr::kable()
+
+```
+
+### ComplementNB
+```{r}
+
+CNB_cm <- confusion_matrix(
+  targets = CNB$Target,
+  predictions = CNB$DiagnosisPrediction,
+  c_levels = c("Control", "Depression", "Schizophrenia"),
+  metrics=list("Accuracy"=TRUE)
+)
+CNB_cm$Table[[1]]
+CNB_cm[, 3:8] %>% knitr::kable()
+CNB_cm[, 9:15] %>% knitr::kable()
+CNB_cm$`Class Level Results`[[1]] %>% .[c(1:2, 5:8)] %>% knitr::kable()
+CNB_cm$`Class Level Results`[[1]] %>% .[c(1, 9:13)] %>% knitr::kable()
+
+```
+
+### MultinomialNB
+
+```{r}
+MNB_cm <- confusion_matrix(
+  targets = MNB$Target,
+  predictions = MNB$DiagnosisPrediction,
+  c_levels = c("Control", "Depression", "Schizophrenia"),
+  metrics=list("Accuracy"=TRUE)
+)
+MNB_cm$Table[[1]]
+MNB_cm[, 3:8] %>% knitr::kable()
+MNB_cm[, 9:15] %>% knitr::kable()
+MNB_cm$`Class Level Results`[[1]] %>% .[c(1:2, 5:8)] %>% knitr::kable()
+MNB_cm$`Class Level Results`[[1]] %>% .[c(1, 9:13)] %>% knitr::kable()
+```
+
+### BernoulliNB
+
+```{r}
+BNB_cm <- confusion_matrix(
+  targets = BNB$Target,
+  predictions = BNB$DiagnosisPrediction,
+  c_levels = c("Control", "Depression", "Schizophrenia"),
+  metrics=list("Accuracy"=TRUE)
+)
+BNB_cm$Table[[1]]
+BNB_cm[, 3:8] %>% knitr::kable()
+BNB_cm[, 9:15] %>% knitr::kable()
+BNB_cm$`Class Level Results`[[1]] %>% .[c(1:2, 5:8)] %>% knitr::kable()
+BNB_cm$`Class Level Results`[[1]] %>% .[c(1, 9:13)] %>% knitr::kable()
+```
+
+### RandomForestClassifier
+
+```{r}
+RFST_cm <- confusion_matrix(
+  targets = RFST$Target,
+  predictions = RFST$DiagnosisPrediction,
+  c_levels = c("Control", "Depression", "Schizophrenia"),
+  metrics=list("Accuracy"=TRUE)
+)
+RFST_cm$Table[[1]]
+RFST_cm[, 3:8] %>% knitr::kable()
+RFST_cm[, 9:15] %>% knitr::kable()
+RFST_cm$`Class Level Results`[[1]] %>% .[c(1:2, 5:8)] %>% knitr::kable()
+RFST_cm$`Class Level Results`[[1]] %>% .[c(1, 9:13)] %>% knitr::kable()
+```
+
+### Support Vector Machine
+
+```{r}
+SVM_cm <- confusion_matrix(
+  targets = SVM$Target,
+  predictions = SVM$DiagnosisPrediction,
+  c_levels = c("Control", "Depression", "Schizophrenia"),
+  metrics=list("Accuracy"=TRUE)
+)
+SVM_cm$Table[[1]]
+SVM_cm[, 3:8] %>% knitr::kable()
+SVM_cm[, 9:15] %>% knitr::kable()
+SVM_cm$`Class Level Results`[[1]] %>% .[c(1:2, 5:8)] %>% knitr::kable()
+SVM_cm$`Class Level Results`[[1]] %>% .[c(1, 9:13)] %>% knitr::kable()
+```
+
+
+## Classifying Control/Not Control
+
+### Baseline
+
+```{r}
+baseline_eval_iscontrol <- cvms::baseline(
+  test_data = CNB,
+  dependent_col = "isControl",
+  n = 20,
+  family = "binomial",
+  metrics = list("Accuracy" = TRUE),
+  parallel = TRUE
+)
+
+summarized_metrics <- baseline_eval_iscontrol$summarized_metrics
+summarized_metrics %>% .[1:7] %>% knitr::kable()
+summarized_metrics %>% .[c(1, 8:11)] %>% knitr::kable()
+```
+
+
+
+### ComplementNB
+
+```{r}
+
+CNB_cm <- confusion_matrix(
+  targets = CNB$isControl,
+  predictions = CNB$IsControlPrediction,
+  c_levels = c(0, 1),
+  metrics=list("Accuracy"=TRUE)
+)
+CNB_cm$Table[[1]]
+CNB_cm[, 3:8] %>% knitr::kable()
+CNB_cm[, 9:14] %>% knitr::kable()
+
+```
+
+### MultinomialNB
+
+```{r}
+MNB_cm <- confusion_matrix(
+  targets = MNB$isControl,
+  predictions = MNB$IsControlPrediction,
+  c_levels = c(0, 1),
+  metrics=list("Accuracy"=TRUE)
+)
+MNB_cm$Table[[1]]
+MNB_cm[, 3:8] %>% knitr::kable()
+MNB_cm[, 9:14] %>% knitr::kable()
+```
+
+### BernoulliNB
+
+```{r}
+BNB_cm <- confusion_matrix(
+  targets = BNB$isControl,
+  predictions = BNB$IsControlPrediction,
+  c_levels = c(0, 1),
+  metrics=list("Accuracy"=TRUE)
+)
+BNB_cm$Table[[1]]
+BNB_cm[, 3:8] %>% knitr::kable()
+BNB_cm[, 9:14] %>% knitr::kable()
+```
+
+### RandomForestClassifier
+
+```{r}
+RFST_cm <- confusion_matrix(
+  targets = RFST$isControl,
+  predictions = RFST$IsControlPrediction,
+  c_levels = c(0, 1),
+  metrics=list("Accuracy"=TRUE)
+)
+RFST_cm$Table[[1]]
+RFST_cm[, 3:8] %>% knitr::kable()
+RFST_cm[, 9:14] %>% knitr::kable()
+```
+
+### SVM
+
+```{r}
+SVM_cm <- confusion_matrix(
+  targets = SVM$isControl,
+  predictions = SVM$IsControlPrediction,
+  c_levels = c(0, 1),
+  metrics=list("Accuracy"=TRUE)
+)
+SVM_cm$Table[[1]]
+SVM_cm[, 3:8] %>% knitr::kable()
+SVM_cm[, 9:14] %>% knitr::kable()
+```
+
